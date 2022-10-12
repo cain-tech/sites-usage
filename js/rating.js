@@ -296,7 +296,7 @@ const highUsageSitesListRequest = async () => {
 
         clearTimeout(nextHighUsageSitesListRequestTimeoutId)
 
-        const nextInterval = settings.retry > 0 ? getConfig('retry_sleep_key') : settings['high_usage_sites_list_interval']
+        const nextInterval = getConfig(settings.retry > 0 ? 'retry_sleep_key' : 'high_usage_sites_list_interval')
         nextHighUsageSitesListRequestTimeoutId = setTimeout(highUsageSitesListRequest, nextInterval)
 
         console.log(`Next process in ${nextInterval}ms`)
