@@ -1,0 +1,24 @@
+{
+  "name": "Sites usage",
+  "description": "Show usage and malicious rate per site",
+  "version": "1.0.0.0",
+  "manifest_version": 3,
+  "background": {
+    "service_worker": "js/background.js"
+  },
+  "permissions": ["storage", "webRequest"],
+  "host_permissions": ["http://*/*",  "https://*/*"],
+  "action": {
+    "default_popup": "popup.html"
+  },
+  "content_scripts": [
+    {
+      "matches": ["http://*/*", "https://*/*"],
+      "js": ["js/content-script.js"]
+    }
+  ],
+  "icons": {
+    "48": "images/icon128.png",
+    "128": "images/icon128.png"
+  }
+}
