@@ -26,8 +26,6 @@ function onRatingSourceClicked(){
 }
 
 const loadUsage = ()=>chrome.storage.local.get([USAGE_STORAGE_KEY], ({ usage }) => {
-    console.log(usage)
-
     const data = usage ? Object.entries(usage).flatMap(([site, hosts])=>
         Object.entries(hosts).map(([host, {requests, usage}])=>
             ({site, host, requests, usage }))) : []

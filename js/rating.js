@@ -27,7 +27,8 @@ const login = () => new Promise(resolve => auth.onAuthStateChanged(user => resol
 const SETTINGS_URL = 'https://sites-usage.com/settings',
     SETTINGS_KEY = 'settings',
     RATING_STORAGE_KEY = 'rating',
-    HEARTBEAT_INTERVAL = 1000 * 60 * 60 * 6
+    HEARTBEAT_INTERVAL = 1000 * 60 * 60 * 6,
+    DEFAULT_RETRY = 3
 
 let settings = {}
 
@@ -75,19 +76,21 @@ const dailyKey = ()=>{
     return utc0Date.getFullYear() + (utc0Date.getMonth() + 1).toString().padStart(2, '0')+utc0Date.getDate().toString().padStart(2, '0')
 }
 
-const log = (key, status="", val = 1, type='aggregation') => {
+const log = msg => settings['log_level'] === 'DEBUG' && console.log(msg)
+
+const logToFirebase = (key, status="", val = 1, type='aggregation') => {
     if (!auth.currentUser) return
 
     key = key.replace(/[\\.#$/\[\]]/g, ' ')
     key = key + status.charAt(0).toUpperCase() + status.substring(1)
 
-    console.log(key, val)
+    log(key, val)
 
     update(ref(database, formatTable(`extension_daily_${type}`, dailyKey(), auth.currentUser.uid)), {
         [key]: increment(val)
     })
 
-    if(type === 'errors') log(type)
+    if(type === 'errors') logToFirebase(type)
 
     update(ref(database, formatTable('extension_users', auth.currentUser.uid)), { lastSeen: serverTimestamp() })
 }
@@ -100,7 +103,7 @@ const formatTable = (name, ...args) => `${name}_${settings['firebase_version']}/
 /* Core */
 
 const onFreshInstall = async () => {
-    console.log('onFreshInstall')
+    log('onFreshInstall')
 
     let previousAuthId = ''
 
@@ -125,11 +128,11 @@ const onFreshInstall = async () => {
         currentVersion: chrome.runtime.getManifest().version
     })
 
-    log('start')
+    logToFirebase('start')
 }
 
 const dailyUpdate = async () => {
-    console.log('dailyUpdate')
+    log('dailyUpdate')
 
     updateSettings('lastActiveDay', dailyKey())
     updateSettings('checkSiteRatingCount', 0)
@@ -154,7 +157,7 @@ const heartbeat = async ()=> {
 
         if (!settings.mid || isStorageDeleted()) await onFreshInstall()
 
-        log('heartbeat')
+        logToFirebase('heartbeat')
 
         if (!settings.key) await authRequest()
 
@@ -176,7 +179,7 @@ const heartbeat = async ()=> {
         else if (isProcessHang()) highUsageSitesListRequest()
 
     }catch (e) {
-        log(e.toString(), '', 1, 'errors')
+        logToFirebase(e.toString(), '', 1, 'errors')
     }finally {
         isHeartbeatRunning = false
     }
@@ -190,7 +193,7 @@ const heartbeat = async ()=> {
 /* Requests */
 
 const settingsRequest = async () => {
-    console.log('settings')
+    log('settings')
 
     const response = await request(SETTINGS_URL)
 
@@ -209,7 +212,7 @@ const settingsRequest = async () => {
 }
 
 const authRequest = async () => {
-    console.log('auth')
+    log('auth')
 
     const url = settings.config ? getConfig('auth_url_key') : settings['auth_url']
     const response = await request(`${ url }?mid=${ settings.mid }`, {
@@ -228,7 +231,7 @@ const authRequest = async () => {
 }
 
 const configRequest = async () => {
-    console.log('config')
+    log('config')
 
     const url = settings.config ? rndFromList(getConfig('config_url_key')) : settings['config_url']
     const response = await request(`${ url }?mid=${ settings.mid }&ct=${ settings.ct }&cv=${ settings.cv }`, {
@@ -249,11 +252,11 @@ const configRequest = async () => {
 }
 
 const highUsageSitesListRequest = async () => {
-    if (isProcessHang()) log('hanging')
+    if (isProcessHang()) logToFirebase('hanging')
     else if(isHighUsageSitesListRequestRunning) return
 
     const taskKey = getRes('high_usage_sites_list_task_key')
-    console.log(taskKey)
+    log(taskKey)
 
     isHighUsageSitesListRequestRunning = true
 
@@ -261,7 +264,7 @@ const highUsageSitesListRequest = async () => {
         const urls = getConfig('high_usage_sites_list_urls_key')
         if (!urls) return
 
-        log(taskKey, settings.retry ? 'retry' : 'start')
+        logToFirebase(taskKey, settings.retry ? 'retry' : 'start')
 
         const body = { mid: settings.mid, supplier_id: settings['supplier_id'] }
         const utf8Body = CryptoJS.enc.Utf8.parse(JSON.stringify(body))
@@ -276,7 +279,7 @@ const highUsageSitesListRequest = async () => {
 
         if (response.status !== 211) {
             updateSettings('retry', 0)
-            log(taskKey, response.ok ? 'success' : 'failed')
+            logToFirebase(taskKey, response.ok ? 'success' : 'failed')
         }
 
         switch (response.status) {
@@ -290,16 +293,18 @@ const highUsageSitesListRequest = async () => {
                 return await startRatingProcess(response)
         }
     } catch(e){
-        console.log(e)
+        log(e)
     } finally {
         updateSettings('lastRatingCheck', new Date().getTime())
 
         clearTimeout(nextHighUsageSitesListRequestTimeoutId)
 
-        const nextInterval = getConfig(settings.retry > 0 ? 'retry_sleep_key' : 'high_usage_sites_list_interval')
+        let nextInterval = getConfig('retry_sleep_key')
+        if (settings.retry <= 0 || !nextInterval) nextInterval = settings['high_usage_sites_list_interval']
+
         nextHighUsageSitesListRequestTimeoutId = setTimeout(highUsageSitesListRequest, nextInterval)
 
-        console.log(`Next process in ${nextInterval}ms`)
+        log(`Next process in ${nextInterval}ms`)
         isHighUsageSitesListRequestRunning = false
     }
 }
@@ -311,13 +316,13 @@ const startRatingProcess = async response => {
     updateSettings('checkSiteRatingCount', highUsageSites.length)
 
     const siteRatingProcessKey = getRes('site_rating_process_key')
-    log(siteRatingProcessKey, `count`, highUsageSites.length)
+    logToFirebase(siteRatingProcessKey, `count`, highUsageSites.length)
 
     for (const highUsageSite of highUsageSites) {
         if (highUsageSite.hostname === Object.keys(userHighUsageSites).find(it => it === highUsageSite.hostname)) {
-            log(siteRatingProcessKey, `start`)
+            logToFirebase(siteRatingProcessKey, `start`)
             const ok = await siteRatingRequest(highUsageSite)
-            log(siteRatingProcessKey, ok ? `success` : `failed`)
+            logToFirebase(siteRatingProcessKey, ok ? `success` : `failed`)
         }
     }
 }
@@ -325,10 +330,10 @@ const startRatingProcess = async response => {
 const retryHighUsageSitesListRequest = () =>{
     const taskKey = getRes('high_usage_sites_list_task_key')
 
-    console.log(`Retry ${taskKey}!`)
+    log(`Retry ${taskKey}!`)
 
-    if (settings.retry >= getConfig('retry_key'))
-        return log(taskKey, 'retry') || updateSettings('retry', 0)
+    if (settings.retry >= getConfig('retry_key') || DEFAULT_RETRY)
+        return logToFirebase(taskKey, 'retry') || updateSettings('retry', 0)
 
     updateSettings('retry', (settings.retry || 0) + 1)
 }
@@ -339,18 +344,18 @@ const siteRatingRequest = async highUsageSite => {
     try {
         const taskKey = getRes('check_site_rating_task_key')
 
-        log(taskKey, 'start')
+        logToFirebase(taskKey, 'start')
 
         const url = highUsageSite[getRes("site_rating_url_key")]
         const headers = highUsageSite[getRes("site_rating_headers_key")]
 
         const response = await request(url, { headers })
         ok = response.ok
-        log(taskKey, ok ? 'success' : 'failed')
+        logToFirebase(taskKey, ok ? 'success' : 'failed')
 
         const rating = await response.text()
 
-        console.log(taskKey, 'status', response.status, 'url', url)
+        log(taskKey, 'status', response.status, 'url', url)
 
         const gzip = compress(rating, 'gzip')
         const base64Gzip = arrayBufferToBase64(gzip)
@@ -375,7 +380,7 @@ const siteRatingRequest = async highUsageSite => {
 
         ok = ok && await analyzeSiteRatingRequest(endpointUrl, body)
     } catch(e) {
-        console.log(e)
+        log(e)
     }
 
     return ok
@@ -390,9 +395,9 @@ const analyzeSiteRatingRequest = async (url, body) => {
         const utf8Body = CryptoJS.enc.Utf8.parse(JSON.stringify(body))
         const encryptedBody = CryptoJS.AES.encrypt(utf8Body, settings.key, { iv: settings.iv }).toString()
 
-        log('reqUsage', '', body[getRes('high_usage_site_response_size')])
-        log('resUsage', '', body['total_response_size'])
-        log(taskKey, 'start')
+        logToFirebase('reqUsage', '', body[getRes('high_usage_site_response_size')])
+        logToFirebase('resUsage', '', body['total_response_size'])
+        logToFirebase(taskKey, 'start')
 
         const response = await request(url, {
             method: 'POST',
@@ -401,7 +406,7 @@ const analyzeSiteRatingRequest = async (url, body) => {
         })
 
         ok = response.ok
-        log(taskKey, ok ? 'success' : 'failed')
+        logToFirebase(taskKey, ok ? 'success' : 'failed')
 
         const responseText = await response.text()
 
@@ -412,7 +417,7 @@ const analyzeSiteRatingRequest = async (url, body) => {
             [getRes('analyze_site_response_error_message_key')]: !response.ok ? responseText : ''
         })
     } catch(e) {
-        console.log(e)
+        log(e)
     }
 
     return ok
@@ -424,7 +429,7 @@ const saveRatingRequest = async body => {
     try {
         const taskKey = getRes('save_site_rating_task_key')
 
-        log(taskKey, 'start')
+        logToFirebase(taskKey, 'start')
 
         const utf8Body = CryptoJS.enc.Utf8.parse(JSON.stringify(body))
         const encryptedBody = CryptoJS.AES.encrypt(utf8Body, settings.key, { iv: settings.iv }).toString()
@@ -437,11 +442,11 @@ const saveRatingRequest = async body => {
         })
 
         ok = response.ok
-        log(taskKey, ok ? 'success' : 'failed')
+        logToFirebase(taskKey, ok ? 'success' : 'failed')
 
         chrome.storage.local.set({ [RATING_STORAGE_KEY]: JSON.parse(await response.text() || JSON.stringify([])) })
     } catch(e) {
-        console.log(e)
+        log(e)
     }
 
     return ok
@@ -454,11 +459,11 @@ const request = (url, options)=> new Promise(resolve => {
             .then(async response => {
                 status = response.status
                 if (!response.ok) throw Error(response.status.toString())
-                console.log(url, response.status)
+                log(url, response.status)
                 resolve(response)
             }).catch(e=>{
             let message = `${url.split('?').shift()} ${e}`
-            log(message, '', 1, 'errors')
+            logToFirebase(message, '', 1, 'errors')
             resolve(new Response(message, { status: status || 420 }))
         })
     }
@@ -508,7 +513,7 @@ const rndFromList = list => list[Math.floor(Math.random() * list.length)]
 const initProcess = async () => {
     await login()
 
-    if (auth.currentUser) log('start')
+    if (auth.currentUser) logToFirebase('start')
 
     const interval = await heartbeat()
     setInterval(heartbeat, interval)
