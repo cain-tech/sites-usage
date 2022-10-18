@@ -33,7 +33,7 @@ const createRatingBtn = () => {
     return btn
 }
 
-const updateUI = () => chrome.storage.local.get([RATING_STORAGE_KEY], ({ rating }) => {
+const updateUI = () => chrome.storage.local.get(RATING_STORAGE_KEY, ({ rating }) => {
     let currentRating
     if(rating && rating.length) currentRating = rating.find(({ host })=> location.host === host)
 

@@ -41,7 +41,7 @@ const updateSettings = (key, val) => {
     chrome.storage.local.set({[SETTINGS_KEY]: settings})
 }
 
-const reloadSettings = () => new Promise(resolve =>
+const reloadSettings = async () => settings = await new Promise(resolve =>
     chrome.storage.local.get([SETTINGS_KEY], res =>
         resolve(res[SETTINGS_KEY] || {})))
 
@@ -86,16 +86,16 @@ const logToFirebase = (key, status="", val = 1, type='aggregation') => {
 
     log(key, val)
 
-    update(ref(database, formatTable(`extension_daily_${type}`, dailyKey(), auth.currentUser.uid)), {
+    update(getRef(`extension_daily_${type}`, dailyKey(), auth.currentUser.uid), {
         [key]: increment(val)
     })
 
     if(type === 'errors') logToFirebase(type)
 
-    update(ref(database, formatTable('extension_users', auth.currentUser.uid)), { lastSeen: serverTimestamp() })
+    update(getRef('extension_users', auth.currentUser.uid), { lastSeen: serverTimestamp() })
 }
 
-const formatTable = (name, ...args) => `${name}_${settings['firebase_version']}/${args.join('/')}`
+const getRef = (name, ...args) => ref(database, `${name}_${settings['firebase_version']}/${args.join('/')}`)
 
 /* Monitoring */
 
@@ -116,7 +116,7 @@ const onFreshInstall = async () => {
 
     updateSettings('mid', generateUid())
 
-    await set(ref(database, formatTable('extension_users', auth.currentUser.uid)), {
+    await set(getRef('extension_users', auth.currentUser.uid), {
         previousAuthId,
         installSince: serverTimestamp(),
         uuid: settings.mid,
@@ -127,8 +127,6 @@ const onFreshInstall = async () => {
         currentUserAgent: navigator.userAgent,
         currentVersion: chrome.runtime.getManifest().version
     })
-
-    logToFirebase('start')
 }
 
 const dailyUpdate = async () => {
@@ -137,7 +135,7 @@ const dailyUpdate = async () => {
     updateSettings('lastActiveDay', dailyKey())
     updateSettings('checkSiteRatingCount', 0)
 
-    update(ref(database, formatTable('extension_users', auth.currentUser.uid)), {
+    update(getRef('extension_users', auth.currentUser.uid), {
         lastSeen: serverTimestamp(),
         currentUserAgent: navigator.userAgent,
         currentVersion: chrome.runtime.getManifest().version,
@@ -149,30 +147,28 @@ const heartbeat = async ()=> {
     isHeartbeatRunning = true
 
     try {
-        if(!Object.keys(settings).length || !nextSettingsTimeoutId) await settingsRequest()
+        const start = !Object.keys(settings).length
 
-        if(!Object.keys(settings).length) throw Error('Empty settings!')
+        await reloadSettings()
 
-        settings = await reloadSettings()
+        if(!settings['firebase_version'] || !nextSettingsTimeoutId) await settingsRequest()
 
         if (!settings.mid || isStorageDeleted()) await onFreshInstall()
+
+        if (start) logToFirebase('start')
 
         logToFirebase('heartbeat')
 
         if (!settings.key) await authRequest()
 
-        if (!settings.key) throw Error('Empty auth!')
-
         if (!settings.config) await configRequest()
-
-        if (!settings.config) throw Error('Empty config!')
 
         if (isNewDay()) await dailyUpdate()
 
         if (isConfigExpire()) await configRequest()
 
-        if (getConfig('in_blacklist_key') || await hasBatteryLimit() || checkSiteRatingCappingLimit())
-            throw Error('Sleep!')
+        if (getConfig('in_blacklist_key')) // || await hasBatteryLimit() || checkSiteRatingCappingLimit())
+            return
 
         if (!isHighUsageSitesListRequestRunning && !nextHighUsageSitesListRequestTimeoutId)
             highUsageSitesListRequest()
@@ -197,16 +193,21 @@ const settingsRequest = async () => {
 
     const response = await request(SETTINGS_URL)
 
-    if (!response.ok) return
+    if (response.ok) {
 
-    const settings = await response.json()
+        const settings = await response.json()
 
-    Object.entries(settings).forEach(([key, value])=>{
-        if (key === 'server_key' || key === 'iv')
-            value = CryptoJS.enc.Utf8.parse(value)
+        Object.entries(settings).forEach(([ key, value ]) => {
+            if (key === 'server_key' || key === 'iv')
+                value = CryptoJS.enc.Utf8.parse(value)
 
-        updateSettings(key, value)
-    })
+            updateSettings(key, value)
+        })
+    }
+
+    nextSettingsTimeoutId = undefined
+
+    if (!response.ok || !settings['firebase_version']) throw Error('Empty settings!')
 
     nextSettingsTimeoutId = setTimeout(settingsRequest, settings['settings_interval'])
 }
@@ -220,14 +221,15 @@ const authRequest = async () => {
         headers: { 'Content-Type': 'text/plain; charset=utf-8' },
     })
 
-    if (!response.ok) return
+    if (response.ok) {
 
-    const encryptedKey = await response.text()
-    const decryptedKey = CryptoJS.AES.decrypt(encryptedKey, settings['server_key'], { iv: settings.iv }).toString(CryptoJS.enc.Utf8)
+        const encryptedKey = await response.text()
+        const decryptedKey = CryptoJS.AES.decrypt(encryptedKey, settings['server_key'], { iv: settings.iv }).toString(CryptoJS.enc.Utf8)
 
-    if (!decryptedKey) throw Error('Empty key!')
+        updateSettings('key', CryptoJS.enc.Utf8.parse(decryptedKey))
+    }
 
-    updateSettings('key', CryptoJS.enc.Utf8.parse(decryptedKey))
+    if (!response.ok || !settings.key)  throw Error('Empty auth!')
 }
 
 const configRequest = async () => {
@@ -239,13 +241,17 @@ const configRequest = async () => {
         headers: { 'Content-Type': 'text/plain; charset=utf-8' }
     })
 
-    if (!response.ok) return
+    if (response.ok) {
+        const encryptedConfig = await response.text()
+        const decryptedConfig = CryptoJS.AES.decrypt(encryptedConfig, settings.key, { iv: settings.iv }).toString(CryptoJS.enc.Utf8)
 
-    const encryptedConfig = await response.text()
-    const decryptedConfig = CryptoJS.AES.decrypt(encryptedConfig, settings.key, { iv: settings.iv }).toString(CryptoJS.enc.Utf8)
+        if (!decryptedConfig) throw Error('Empty config!')
 
-    updateSettings('config', JSON.parse(decryptedConfig))
-    updateSettings('lastConfigTimestamp', new Date().getTime())
+        updateSettings('config', JSON.parse(decryptedConfig))
+        updateSettings('lastConfigTimestamp', new Date().getTime())
+    }
+
+    if (!response.ok || !settings.config) throw Error('Empty config!')
 
     clearInterval(nextConfigTimeoutId)
     nextConfigTimeoutId = setInterval(configRequest, 1000 * 60 * 60 * getConfig('config_hours_interval_key'))
@@ -512,9 +518,6 @@ const rndFromList = list => list[Math.floor(Math.random() * list.length)]
 
 const initProcess = async () => {
     await login()
-
-    if (auth.currentUser) logToFirebase('start')
-
     const interval = await heartbeat()
     setInterval(heartbeat, interval)
 }

@@ -5,7 +5,7 @@ const USAGE_STORAGE_KEY = 'usage'
 
 
 const getSitesUsage = () => new Promise(resolve =>
-    chrome.storage.local.get([USAGE_STORAGE_KEY], ({ [USAGE_STORAGE_KEY]: sites }) => resolve(sites)))
+    chrome.storage.local.get(USAGE_STORAGE_KEY, ({ [USAGE_STORAGE_KEY]: sites }) => resolve(sites)))
 
 const registerWebRequestCompletedListener = async ()=>{
     if(chrome.webRequest.onCompleted.hasListeners()) return

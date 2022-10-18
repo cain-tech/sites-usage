@@ -25,7 +25,7 @@ function onRatingSourceClicked(){
     return false;
 }
 
-const loadUsage = ()=>chrome.storage.local.get([USAGE_STORAGE_KEY], ({ usage }) => {
+const loadUsage = ()=>chrome.storage.local.get(USAGE_STORAGE_KEY, ({ usage }) => {
     const data = usage ? Object.entries(usage).flatMap(([site, hosts])=>
         Object.entries(hosts).map(([host, {requests, usage}])=>
             ({site, host, requests, usage }))) : []
@@ -42,7 +42,7 @@ const loadUsage = ()=>chrome.storage.local.get([USAGE_STORAGE_KEY], ({ usage }) 
     })
 })
 
-const loadRating = () => chrome.storage.local.get([RATING_STORAGE_KEY], ({ rating }) => {
+const loadRating = () => chrome.storage.local.get(RATING_STORAGE_KEY, ({ rating }) => {
     const isEmpty = !rating || !rating.length
     const text = isEmpty ? 'No rating available!' : 'Sites rating data'
     $('#no-rating-data').html(text)
