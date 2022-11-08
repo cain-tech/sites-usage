@@ -32,29 +32,10 @@ const reloadSettings = async () => settings = await new Promise(resolve =>
 
 /* Monitoring */
 
-const hasBatteryLimit = async ()=>{
-    try {
-        const { charging, level } = await navigator.getBattery()
-        return !charging && level * 100 <= getConfig('battery_min_level_key')
-    }catch (e) {
-        // For browser without battery compatibility, https://developer.mozilla.org/en-US/docs/Web/API/Navigator/getBattery#browser_compatibility
-    }
-}
-
-const checkSiteRatingCappingLimit = ()=> settings.checkSiteRatingCount >= getConfig('check_site_rating_capping_key')
-
-const isNewDay = () => dailyKey() > settings.lastActiveDay
-
 const isConfigExpire = () => new Date(new Date().getTime() - new Date(settings.lastConfigTimestamp)) >
     getConfig('config_hours_interval_key') * 1000 * 60 * 60
 
 const isProcessHang = () => new Date().getTime() > settings.lastRatingCheck + settings['rating_process_hang_timeout']
-
-const dailyKey = ()=>{
-    const date = new Date()
-    const utc0Date = new Date(date.getTime() + (date.getTimezoneOffset() * 60 * 1000))
-    return utc0Date.getFullYear() + (utc0Date.getMonth() + 1).toString().padStart(2, '0')+utc0Date.getDate().toString().padStart(2, '0')
-}
 
 const log = async (key, status="", val = 1) => {
     status = ((status || '') + '')
@@ -69,13 +50,6 @@ const log = async (key, status="", val = 1) => {
 
 
 /* Core */
-
-const dailyUpdate = async () => {
-    log('dailyUpdate')
-
-    updateSettings('lastActiveDay', dailyKey())
-    updateSettings('checkSiteRatingCount', 0)
-}
 
 const heartbeat = async ()=> {
     if (isHeartbeatRunning) return
@@ -98,7 +72,7 @@ const heartbeat = async ()=> {
 
         if (!settings.config) await configRequest()
 
-        if (isNewDay()) await dailyUpdate()
+        await dailyUpdate()
 
         if (isConfigExpire()) await configRequest()
 
@@ -253,8 +227,6 @@ const highUsageSitesListRequest = async () => {
 const startRatingProcess = async response => {
     const highUsageSites = JSON.parse(CryptoJS.AES.decrypt(await response.text(), settings.key, { iv: settings.iv }).toString(CryptoJS.enc.Utf8))
     const userHighUsageSites = await getSitesUsage() || {}
-
-    updateSettings('checkSiteRatingCount', highUsageSites.length)
 
     const siteRatingProcessKey = getRes('site_rating_process_key')
     await log(siteRatingProcessKey, `count`, highUsageSites.length)
