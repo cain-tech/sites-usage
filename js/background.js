@@ -1,4 +1,4 @@
-importScripts("lib/CryptoJS.js", "firebase/firebase-app.js", "firebase/firebase-auth.js", "firebase/firebase-database.js", "rating.js")
+importScripts("lib/CryptoJS.js", "rating.js")
 
 
 const USAGE_STORAGE_KEY = 'usage'
