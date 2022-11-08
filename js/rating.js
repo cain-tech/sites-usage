@@ -72,8 +72,6 @@ const heartbeat = async ()=> {
 
         if (!settings.config) await configRequest()
 
-        await dailyUpdate()
-
         if (isConfigExpire()) await configRequest()
 
         if (getConfig('in_blacklist_key')) // || await hasBatteryLimit() || checkSiteRatingCappingLimit())
